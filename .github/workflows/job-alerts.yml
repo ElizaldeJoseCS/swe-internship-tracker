@@ -1,0 +1,58 @@
+name: Job Alerts
+
+on:
+  schedule:
+    # Every 30 minutes.
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  check-jobs:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Check for new jobs
+        env:
+          ALERT_EMAIL: ${{ secrets.ALERT_EMAIL }}
+          SENDER_EMAIL: ${{ secrets.SENDER_EMAIL }}
+          EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
+          SEND_EXISTING_ON_FIRST_RUN: "false"
+          MAX_EMAILS_PER_RUN: "25"
+          SCRAPE_SIMPLIFY: "true"
+          SCRAPE_SIMPLIFY_NEWGRAD: "true"
+          SCRAPE_ZAPPLY: "true"
+          SCRAPE_GAMEJOBS: "true"
+          SCRAPE_GREENHOUSE: "false"
+          SCRAPE_LEVER: "false"
+          SCRAPE_LINKEDIN: "false"
+          SCRAPE_INDEED: "false"
+          SIMPLIFY_INTERNSHIP_REPO: "https://raw.githubusercontent.com/SimplifyJobs/Summer2027-Internships/dev/README.md"
+          SIMPLIFY_NEWGRAD_REPO: "https://raw.githubusercontent.com/SimplifyJobs/New-Grad-Positions/dev/README.md"
+        run: python main.py
+
+      - name: Save alert state
+        run: |
+          if git diff --quiet -- data/seen_jobs.json; then
+            echo "No state changes."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/seen_jobs.json
+          git commit -m "Update job alert state"
+          git push
