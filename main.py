@@ -1,78 +1,93 @@
-# CLI entry point: run the scrapers and write results to Google Sheets.
-#
-# Usage examples:
-#   python main.py              # run all enabled sources, write to the sheet
-#   python main.py --dry        # print results to stdout, don't touch sheet
-#   python main.py --json out   # write results to out/ as JSON too
+"""Run the job scrapers and email only newly detected matching roles."""
 
 import argparse
-import json
 import os
 from datetime import datetime
 
 from scrapers import run_all
-import sheets_manager
-
-
-def _slice_marker() -> str:
-    """Return a short machine-readable marker for run outputs."""
-    return datetime.now().strftime("%Y%m%d_%H%M%S")
-
+from job_filter import is_match, categories
+from email_notifier import send_job_alert
+from alert_state import load_seen, save_seen, normalize_url
+from config import settings
 
 def main():
-    parser = argparse.ArgumentParser(description="Scrape SWE internships to Google Sheets")
-    parser.add_argument("--dry", action="store_true", help="Don't write to the sheet, just print.")
-    parser.add_argument("--json", metavar="DIR", help="Also dump results as JSON into DIR.")
+    parser = argparse.ArgumentParser(
+        description="Find early-career SWE, quant-dev, and game-dev jobs and email new matches."
+    )
     parser.add_argument(
-        "--force",
+        "--dry",
         action="store_true",
-        help="Write even if the scrape looks too small (skips the safety guard).",
+        help="Print matching jobs without sending email or changing state.",
+    )
+    parser.add_argument(
+        "--initialize",
+        action="store_true",
+        help="Record all currently visible matching jobs without emailing them.",
     )
     args = parser.parse_args()
 
-    internships = run_all()
+    jobs = run_all()
+    matches = [job for job in jobs if is_match(job)]
 
-    if args.json:
-        os.makedirs(args.json, exist_ok=True)
-        path = os.path.join(
-            args.json, f"internships_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-        )
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump([i.to_dict() for i in internships], f, indent=2, default=str)
-        print(f"Wrote JSON -> {path}")
+    # Deduplicate by normalized URL.
+    unique = {}
+    for job in matches:
+        key = normalize_url(job.url)
+        if key:
+            unique[key] = job
+    matches = list(unique.values())
+
+    print(f"Scraped: {len(jobs)} jobs")
+    print(f"Matching early-career alerts: {len(matches)}")
+
+    seen, has_state = load_seen()
 
     if args.dry:
-        for i in internships:
-            print(f"  [{i.source}] {i.company}: {i.title} | {i.location} | {i.url}")
-        print(f"\n{len(internships)} total (dry run, sheet not modified).")
+        for job in matches:
+            print(
+                f"[{', '.join(categories(job))}] "
+                f"{job.company} | {job.title} | {job.location} | {job.url}"
+            )
         return
 
-    if not internships:
-        print("Nothing scraped; sheet not modified.")
-        return
-
-    # Safety guard: if the new scrape has far fewer rows than what's already in
-    # the sheet, one or more sources likely failed (e.g. a network error) and
-    # overwriting would wipe existing rows. Abort unless --force is passed.
-    existing = sheets_manager.count_rows()
-    threshold = 0.5  # require the new scrape to be at least 50% of existing rows
-    if (
-        not args.force
-        and existing > 20
-        and len(internships) < int(existing * threshold)
-    ):
+    # First run is a bootstrap by default. This prevents a flood of emails
+    # for every job that was already open before the tracker was installed.
+    if args.initialize or (not has_state and not settings.SEND_EXISTING_ON_FIRST_RUN):
+        for job in matches:
+            seen.add(normalize_url(job.url))
+        save_seen(seen)
         print(
-            f"  ! Safety guard triggered: scraped {len(internships)} rows but the "
-            f"sheet already has {existing}. A source likely failed, so the sheet "
-            f"was NOT modified. Re-run to retry, or use --force to overwrite anyway."
+            f"Initialized state with {len(matches)} currently-open matching jobs. "
+            "No emails sent."
         )
         return
 
-    # Preserve statuses from the previous scrape.
-    status_map = sheets_manager.read_statuses()
-    sheets_manager.write_internships(internships, status_map=status_map)
-    print("Done. Open your Google Sheet to view results.")
+    new_jobs = [
+        job for job in matches
+        if normalize_url(job.url) not in seen
+    ]
 
+    # Oldest first is nicer if several jobs appeared between scheduled runs.
+    new_jobs.sort(key=lambda j: (j.posted_date or "9999-99-99", j.company, j.title))
+
+    print(f"New jobs requiring email: {len(new_jobs)}")
+
+    sent = 0
+    for job in new_jobs[: settings.MAX_EMAILS_PER_RUN]:
+        try:
+            send_job_alert(job, categories(job))
+            seen.add(normalize_url(job.url))
+            sent += 1
+            print(f"  emailed: {job.company} — {job.title}")
+        except Exception as exc:
+            # Do NOT mark a failed email as seen, so the next run retries it.
+            print(f"  email failed for {job.company} — {job.title}: {exc}")
+
+    # Also remember jobs we didn't email only if they were already known.
+    # New jobs beyond MAX_EMAILS_PER_RUN stay un-seen and will be emailed next run.
+    save_seen(seen)
+
+    print(f"Sent {sent} alert(s). State contains {len(seen)} jobs.")
 
 if __name__ == "__main__":
     main()

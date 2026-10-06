@@ -1,154 +1,93 @@
-# SWE Internship Tracker
+# Job Alert Tracker
 
-Scrapes software-engineering internship and new-grad postings from several
-sources into a Google Sheet, where you can track application status
-(Not Applied / Interviewing / Not Accepted / Ghosted).
+This version no longer uses Google Sheets. It emails only **newly detected**
+early-career roles that match:
 
-## Features
+- Software Engineering: internships + new grad / entry level
+- Quant Developer: internships + new grad / entry level, especially C++ / Python
+- Game Development: internships + new grad / entry level
 
-- **Multi-source scraping**: SimplifyJobs internship + new-grad GitHub repos,
-  zapplyjobs new-grad repo, Greenhouse API, Lever API, LinkedIn, Indeed, and a
-  game-industry board (GameJobs).
-- **Google Sheets** storage with a Status column that survives re-scrapes
-  (existing statuses are preserved, rows are refreshed).
-- **Three tabs**: roles are split automatically — game-development roles go on
-  a "Game Dev" tab, non-game new-grad postings go on a "New Grad" tab, and the
-  rest go on the main "Internships" tab.
-- **Status dropdown** on the Status column in the sheet for quick updates
-  (Not Applied / Interviewing / Not Accepted / Ghosted).
-- **Cross-source dedupe**: the same posting found in two repos is only kept once.
-- **Skills column**: pulls common tech keywords from each posting so you can see
-  what they're looking for at a glance.
-- **Safety guard**: won't wipe your sheet if a scrape fails (see below).
+It uses the existing Simplify, Zapply, and GameJobs scrapers and remembers
+already-emailed application URLs in `data/seen_jobs.json`.
 
-## Prerequisites
+## 1. Gmail setup
 
-- **Python 3.9+**
-- **Git**
-- A **Google Cloud** account to create a service account (free).
+Use a Gmail **App Password**, not your normal Gmail password.
 
-## Install (fresh clone)
+1. Turn on 2-Step Verification for the Gmail account you will send from.
+2. Create a Google App Password.
+3. Put the 16-character App Password into the GitHub repository secret
+   `EMAIL_PASSWORD`.
+
+The alert destination is `je2398157@gmail.com`.
+
+## 2. GitHub secrets
+
+Repository -> Settings -> Secrets and variables -> Actions -> New repository secret
+
+Create:
+
+- `ALERT_EMAIL` = `je2398157@gmail.com`
+- `SENDER_EMAIL` = the Gmail address sending the email
+- `EMAIL_PASSWORD` = Gmail App Password
+
+Do NOT commit the App Password.
+
+## 3. First run
+
+The default is intentionally:
+
+`SEND_EXISTING_ON_FIRST_RUN=false`
+
+So the first scheduled run records jobs that are already open without emailing
+you about hundreds of old postings.
+
+After that, when a new posting appears, it is emailed once with its direct
+application URL.
+
+If you really want the first run to email every currently-open match, set the
+environment variable to `true` for that run.
+
+## 4. Run locally
 
 ```bash
-git clone <your-repo-url>
-cd internships
-python -m venv .venv
-source .venv/bin/activate        # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
+python main.py --dry
+python main.py --initialize
+python main.py
 ```
 
-## Set up Google Sheets access
+`--dry` prints matches without sending email.
 
-This lets the scraper write to (and read from) a Google Sheet you own.
+`--initialize` records current matches without sending email.
 
-1. Go to https://console.cloud.google.com → create a project (or reuse one).
-2. Enable the **Google Sheets API**.
-3. Go to **IAM & Admin → Service Accounts** → **Create service account**:
-   - Name it anything (e.g. `internship-scraper`).
-   - After creating, open it → **Keys** → **Add key** → **Create new key** →
-     choose **JSON**. Download the key file.
-4. Create a blank spreadsheet at https://sheets.new.
-   - Click **Share** and add the service account's email (the `client_email`
-     field inside the JSON key) as an **Editor**.
-5. Save the key file into the repo as `config/google_credentials.json`
-   (create the `config/` folder if needed — it isn't committed to git so the
-   folder won't exist after cloning):
+## 5. GitHub Actions
 
-   ```bash
-   mkdir -p config
-   cp ~/Downloads/<your-key>.json config/google_credentials.json
-   ```
+`.github/workflows/job-alerts.yml` runs every 30 minutes and can also be run
+manually from the Actions tab.
 
-6. Copy the spreadsheet ID from its URL. In
-   `https://docs.google.com/spreadsheets/d/<GSHEET_ID>/edit`, take the
-   `<GSHEET_ID>` part (the `1k...` string).
+The workflow commits `data/seen_jobs.json` so the tracker remembers which jobs
+have already triggered an alert.
 
-> The credentials file and `.env` are both git-ignored, so your key and sheet ID
-> never get committed.
+## Matching behavior
 
-## Configure
+A posting must look like an early-career role (intern, co-op, new grad,
+entry-level, junior, etc.) and match at least one of the following:
 
-```bash
-cp .env.example .env
-# edit .env and set at least:
-#   GSHEET_ID=<your spreadsheet id or full url>
-#   GREENHOUSE_BOARDS=<comma-separated slugs>   (if using Greenhouse)
-#   LEVER_BOARDS=<comma-separated slugs>        (if using Lever)
-```
+### SWE
+Software Engineer, Software Developer, Backend, Frontend, Full Stack,
+Systems Engineer, Platform Engineer, DevOps, and similar.
 
-Every `.env` option is documented in `.env.example`. The most important ones:
+### Quant Developer
+Quant Developer, Quantitative Developer, Quantitative Engineer, Trading
+Systems, Algorithmic Trading Developer, Trading Software, Research Engineer,
+and related quant/trading roles. C++ and Python are explicitly included in
+the matching logic.
 
-| Variable | Purpose | Default |
-|----------|---------|---------|
-| `GSHEET_ID` | Your spreadsheet ID (or full URL). **Required.** | — |
-| `CREDENTIALS_FILE` | Path to your service-account key. | `config/google_credentials.json` |
-| `SHEET_NAME` | Main tab name. | `Internships` |
-| `NEW_GRAD_SHEET_NAME` | Tab for new-grad roles. | `New Grad` |
-| `GAME_DEV_SHEET_NAME` | Tab for game-industry roles. | `Game Dev` |
-| `SCRAPE_*` | Toggle each source on/off. | GitHub + API sources on; LinkedIn/Indeed off |
-| `GREENHOUSE_BOARDS` | Comma-separated board slugs (e.g. `stripe,airbnb`). | empty |
-| `LEVER_BOARDS` | Comma-separated board slugs (e.g. `palantir,rover`). | empty |
-| `TARGET_COMPANIES` | If set, keep only these companies. | empty |
-| `GAME_MAX_PAGES` | GameJobs feed pages to scrape. | `8` |
+### Game Development
+Gameplay Engineer/Programmer, Game Programmer/Developer, Engine Programmer,
+Graphics/Rendering, Game AI, Tools Engineer/Programmer, Unity, Unreal, Game
+Server, and related game-engineering roles.
 
-## Run
-
-```bash
-python main.py            # writes to your sheet
-python main.py --dry      # just prints, doesn't touch the sheet
-python main.py --force    # write even if the scrape looks too small
-```
-
-**Safety guard**: if a scrape (e.g. after a transient network error on GitHub)
-yields far fewer rows than already in the sheet, the script stops and leaves
-your existing rows untouched instead of overwriting them. If you *really* want
-to replace everything, pass `--force`.
-
-Statuses are edited directly in the Google Sheet's **Status** column via the
-dropdown — no code needed. Their changes survive every re-scrape.
-
-## Project layout
-
-```
-internships/
-├── main.py             # CLI scraper -> Google Sheets
-├── models.py           # Internship dataclass + dedupe
-├── game_dev.py         # game-dev role classifier (separate tab)
-├── new_grad.py         # new-grad vs internship classifier (separate tab)
-├── sheets_manager.py   # Google Sheets read/write
-├── config/settings.py  # central configuration (reads .env)
-├── scrapers/
-│   ├── common.py       # HTTP session + relevance filtering
-│   ├── simplify.py     # SimplifyJobs internship + new-grad GitHub repos
-│   ├── zapply.py       # zapplyjobs New-Grad-Jobs-2027 GitHub repo
-│   ├── greenhouse.py   # Greenhouse boards API
-│   ├── lever.py        # Lever postings API
-│   ├── linkedin.py     # LinkedIn guest search
-│   ├── indeed.py       # Indeed search
-│   ├── gamejobs.py     # GameJobs.co game-industry board
-│   └── __init__.py     # orchestrator
-```
-
-## Configuring sources
-
-| Source | How to enable | Notes |
-|--------|---------------|-------|
-| **Simplify (intern)** | `SCRAPE_SIMPLIFY=true` | Community internships GitHub repo. |
-| **Simplify (new grad)** | `SCRAPE_SIMPLIFY_NEWGRAD=true` | Community new-grad GitHub repo. |
-| **zapplyjobs** | `SCRAPE_ZAPPLY=true` | New-Grad-Jobs-2027 GitHub repo (kept to SWE roles). |
-| **Greenhouse** | `SCRAPE_GREENHOUSE=true` + `GREENHOUSE_BOARDS=stripe,airbnb` | Uses the public boards API. Set the board slugs you care about. |
-| **Lever** | `SCRAPE_LEVER=true` + `LEVER_BOARDS=acme,foo` | Uses the public postings API. |
-| **LinkedIn** | `SCRAPE_LINKEDIN=true` (+ optionally `LINKEDIN_COOKIE`) | Guest scraping; may be rate-limited/blocked. A session cookie helps. |
-| **Indeed** | `SCRAPE_INDEED=true` | Same anti-bot caveats as LinkedIn. |
-| **GameJobs** | `SCRAPE_GAMEJOBS=true` | Game-industry job board. |
-
-Legal note: job sites' ToS often prohibit scraping; use reasonable rate limits
-and consider the API-based sources (Greenhouse/Lever/Simplify) as your primary
-reliable sources. Keep personal requests low and respect robots.txt.
-
-## Application statuses (Status dropdown)
-
-- **Not Applied** — default for new rows
-- **Interviewing** — you have an interview/process in progress
-- **Not Accepted** — the company passed on your application
-- **Ghosted** — applied but never heard back
+There is deliberately no company whitelist, so the tracker can find roles at
+FAANG, major finance firms, game studios, startups, and other companies.
