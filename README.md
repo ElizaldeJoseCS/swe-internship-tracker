@@ -1,10 +1,6 @@
 # Job Alert Tracker
 
-This version no longer uses Google Sheets. It emails only **newly detected**
-early-career roles that match:
-
 - Software Engineering: internships + new grad / entry level
-- Quant Developer: internships + new grad / entry level, especially C++ / Python
 - Game Development: internships + new grad / entry level
 
 It uses the existing Simplify, Zapply, and GameJobs scrapers and remembers
